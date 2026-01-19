@@ -1,4 +1,7 @@
-// index.js – Sasyam WhatsApp bot (order flow + custom message fallback)
+// index.js – Sasyam WhatsApp bot
+// Supports:
+// 1) Yellow.ai → Backend order flow (/api/message)
+// 2) Meta WhatsApp Cloud API webhooks (/webhook)
 
 require("dotenv").config();
 const express = require("express");
@@ -11,47 +14,127 @@ const fetch = (...args) =>
 const app = express();
 app.use(bodyParser.json());
 
+// ENV variables
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const SUPPORT_NUMBER = process.env.SASYAM_SUPPORT_NUMBER;
 
-// Just to test root
+// --------------------------------------------------
+// Root test route
+// --------------------------------------------------
 app.get("/", (req, res) => {
   res.send("Sasyam WhatsApp bot server is running ✅");
 });
 
-// Helper: log basic info
-function logRequest(req) {
-  console.log("---- Incoming request ----");
-  console.log("Path:", req.path);
-  console.log("Query:", req.query);
-  console.log("Body:", JSON.stringify(req.body, null, 2));
-  console.log("--------------------------");
-}
+// --------------------------------------------------
+// YELLOW.AI → BACKEND API (MAIN ORDER FLOW)
+// --------------------------------------------------
+app.post("/api/message", (req, res) => {
+  const { phone, message } = req.body;
 
-// ✅ GET webhook (verification) – for Meta
-["/webhook", "/whatsapp/webhook"].forEach((path) => {
-  app.get(path, (req, res) => {
-    logRequest(req);
+  console.log("📩 Yellow.ai request:", phone, message);
 
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
+  if (!message) {
+    return res.json({
+      reply: "Please send a valid message to continue."
+    });
+  }
 
-    console.log("mode =", mode, "token =", token, "challenge =", challenge);
+  const text = message.toLowerCase().trim();
 
-    if (mode === "subscribe" && token === VERIFY_TOKEN) {
-      console.log("✅ Webhook verified successfully");
-      return res.status(200).send(challenge);
-    } else {
-      console.log("❌ Webhook verification failed");
-      return res.sendStatus(403);
-    }
+  // STEP 1: Greeting
+  if (["hi", "hey", "hello"].includes(text)) {
+    return res.json({
+      reply:
+        "Hey! 👋 Welcome to *Sasyam Edibles* 🌿\n\n" +
+        "We sell *cold-pressed groundnut oil*.\n\n" +
+        "Please choose the pack size:\n" +
+        "• 1 litre\n" +
+        "• 5 litre"
+    });
+  }
+
+  // STEP 2: Pack size
+  if (text === "1 litre" || text === "1 liter" || text === "1l") {
+    return res.json({
+      reply:
+        "Great choice 👍\n\n" +
+        "Each *1 litre* bottle costs ₹324.\n\n" +
+        "How many bottles would you like to order?"
+    });
+  }
+
+  if (text === "5 litre" || text === "5 liter" || text === "5l") {
+    return res.json({
+      reply:
+        "Great choice 👍\n\n" +
+        "Please enter the number of *5 litre* cans you want to order."
+    });
+  }
+
+  // STEP 3: Quantity (number)
+  if (!isNaN(text)) {
+    const qty = Number(text);
+    const pricePerBottle = 324;
+    const total = qty * pricePerBottle;
+
+    return res.json({
+      reply:
+        "🧾 *Order Summary*\n\n" +
+        `• Pack size: 1 litre\n` +
+        `• Quantity: ${qty}\n` +
+        `• Price per bottle: ₹${pricePerBottle}\n` +
+        `• Total amount: ₹${total}\n\n` +
+        "Please share your *delivery address*."
+    });
+  }
+
+  // STEP 4: Address
+  if (text.length > 10) {
+    const orderId = "SASYAM" + Date.now().toString().slice(-6);
+
+    return res.json({
+      reply:
+        "✅ *Order Confirmed!*\n\n" +
+        `Order ID: ${orderId}\n\n` +
+        "You will receive your order within *24–48 hours* 🚚\n\n" +
+        "Thank you for choosing *Sasyam Edibles* 🌿"
+    });
+  }
+
+  // Fallback
+  return res.json({
+    reply:
+      "I didn’t quite get that 🤔\n\n" +
+      "Please reply with:\n" +
+      "• Hi\n" +
+      "• 1 litre\n" +
+      "• 5 litre"
   });
 });
 
-// Helper: send a WhatsApp text message using the Cloud API
+// --------------------------------------------------
+// META WHATSAPP CLOUD API – WEBHOOK VERIFICATION
+// --------------------------------------------------
+["/webhook", "/whatsapp/webhook"].forEach((path) => {
+  app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    console.log("Webhook verified successfully");
+    return res.status(200).send(challenge);
+  }
+
+  return res.sendStatus(403);
+});
+
+
+// --------------------------------------------------
+// META WHATSAPP CLOUD API – MESSAGE HANDLER (FUTURE USE)
+// --------------------------------------------------
 async function sendWhatsAppText(to, body) {
   const url = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
@@ -62,9 +145,7 @@ async function sendWhatsAppText(to, body) {
     text: { body },
   };
 
-  console.log("Sending WhatsApp message:", JSON.stringify(payload, null, 2));
-
-  const resp = await fetch(url, {
+  await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -72,112 +153,36 @@ async function sendWhatsAppText(to, body) {
     },
     body: JSON.stringify(payload),
   });
-
-  const data = await resp.json();
-  console.log("WhatsApp API response:", JSON.stringify(data, null, 2));
 }
 
-// Very simple classifier: decide if message is an "order" or "custom query"
-function isOrderMessage(text) {
-  const t = text.toLowerCase();
-
-  // keywords indicating they are trying to order groundnut oil
-  const orderKeywords = [
-    "order",
-    "buy",
-    "groundnut",
-    "ground nut",
-    "oil",
-    "1l",
-    "1 l",
-    "1 litre",
-    "1 liter",
-    "5l",
-    "5 l",
-    "5 litre",
-    "5 liter",
-    "15l",
-    "15 l",
-    "15 litre",
-    "15 liter",
-  ];
-
-  return orderKeywords.some((kw) => t.includes(kw));
-}
-
-// Create reply text for an order-type message
-function buildOrderReply(text) {
-  return (
-    "🙏 Thank you for choosing Sasyam Edibles!\n\n" +
-    "We currently sell *cold pressed groundnut oil*.\n\n" +
-    "Please reply in one of these formats so we can process your order:\n" +
-    "• `order 1L`\n" +
-    "• `order 5L`\n" +
-    "• `order 15L`\n\n" +
-    "You can also mention quantity, for example: `order 3 x 5L`."
-  );
-}
-
-// Fallback reply for custom / non-order messages
-function buildCustomReply() {
-  return (
-    "Thank you for reaching out to *Sasyam Edibles*.\n\n" +
-    "For custom queries, bulk orders, or anything else, " +
-    `please contact us directly on this number:\n${SUPPORT_NUMBER}\n\n` +
-    "We’ll be happy to help you there. 🙏"
-  );
-}
-
-// ✅ POST webhook – when messages actually come from WhatsApp
 ["/webhook", "/whatsapp/webhook"].forEach((path) => {
   app.post(path, async (req, res) => {
-    logRequest(req);
-
     try {
-      const entry = req.body.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const value = changes?.value;
-      const messages = value?.messages;
+      const msg =
+        req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-      // No message (could be status update etc.)
-      if (!messages || messages.length === 0) {
-        console.log("No incoming messages in this webhook.");
+      if (!msg || msg.type !== "text") {
         return res.sendStatus(200);
       }
 
-      const msg = messages[0];
-      const from = msg.from; // customer WhatsApp number
-      const type = msg.type;
+      const from = msg.from;
+      const text = msg.text.body;
 
-      if (type === "text" && msg.text && msg.text.body) {
-        const text = msg.text.body.trim();
-        console.log("Received text:", text, "from:", from);
+      await sendWhatsAppText(
+        from,
+        "Hi 👋 Please place your order via our WhatsApp assistant."
+      );
 
-        let reply;
-
-        if (isOrderMessage(text)) {
-          // They are talking about ordering groundnut oil
-          reply = buildOrderReply(text);
-        } else {
-          // Custom / random / query message -> send support number
-          reply = buildCustomReply();
-        }
-
-        await sendWhatsAppText(from, reply);
-      } else {
-        console.log("Non-text message type received:", type);
-      }
-
-      // Always respond 200 to Meta quickly
       res.sendStatus(200);
     } catch (err) {
-      console.error("Error handling webhook:", err);
+      console.error(err);
       res.sendStatus(500);
     }
   });
 });
 
+// --------------------------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("🚀 Server running on port", PORT);
 });
