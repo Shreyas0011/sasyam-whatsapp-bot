@@ -117,14 +117,13 @@ app.post("/api/message", (req, res) => {
 // --------------------------------------------------
 // META WHATSAPP CLOUD API – WEBHOOK VERIFICATION
 // --------------------------------------------------
-["/webhook", "/whatsapp/webhook"].forEach((path) => {
-  app.get("/webhook", (req, res) => {
+app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-    console.log("Webhook verified successfully");
+    console.log("✅ Webhook verified successfully");
     return res.status(200).send(challenge);
   }
 
@@ -186,3 +185,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("🚀 Server running on port", PORT);
 });
+
